@@ -16,6 +16,7 @@
 #include "mmu.h"
 #include "proc.h"
 #include "x86.h"
+#include "kbd.h" // Include kbd to get the keycode constants for the arrow keys
 
 static void consputc(int);
 
@@ -227,21 +228,71 @@ consoleintr(int (*getc)(void))
         consputc(BACKSPACE);
       }
       break;
-    case C('H'): case '\x7f':  // Backspace
-      if (input.e != input.w) {
-        input.e--;
-        consputc(BACKSPACE);
-      }
-      break;
+    // Make sure to leave this commented out. If this is uncommented,
+    //  you will not be able to edit the current command being typed (any backspace input will NOT be dealt with.
+    // case C('H'): case '\x7f':  // Backspace 
+    //   if (input.e != input.w) {
+    //     input.e--;
+    //     consputc(BACKSPACE);
+    //   }
+    //   break;
     default:
-      if (c != 0 && input.e-input.r < INPUT_BUF) {
-        c = (c == '\r') ? '\n' : c;
-        input.buf[input.e++ % INPUT_BUF] = c;
-        consputc(c);
-        if (c == '\n' || c == C('D') || input.e == input.r+INPUT_BUF) {
+
+      // Since the arrow keys come in as three bytes (For exampke UP = ESC [ A), state will need to keep track of the escape sequence we are in.
+      static int escape_sequence = 0;
+      
+      // If we get the first byte of the sequence to be ESC, set escape_sequence to 1
+      if (c == 27) {
+        escape_sequence = 1;
+        break;
+      }
+
+      // If we got the first byte to be ESC and the next byte is [, set escape_sequence to 2
+      if (escape_sequence == 1 && c == '[') {
+        escape_sequence = 2;
+        break;
+      }
+
+      // If we already got ESC [, we need to decode the last byte which determines which arrow key was pressed
+      if (escape_sequence == 2) {
+        escape_sequence = 0; // Reset the escape_sequence
+        
+        // Get the last byte and set the int c to the correct arrow key
+        if (c == 'A') {
+          c = KEY_UP;
+        } else if (c == 'B') {
+          c = KEY_DN;
+        } else if (c == 'C') {
+          c = KEY_RT;
+        } else if (c == 'D') {
+          c = KEY_LF;
+        } else {
+          break;
+        }
+
+        // If the buffer is not full, store the key which was pressed, and wakeup the shell so it can process the key
+        if (input.e - input.r < INPUT_BUF) {
+          input.buf[input.e++ % INPUT_BUF] = c;
           input.w = input.e;
           wakeup(&input.r);
         }
+        break;
+      }
+      
+      // This is for the normal char inputs (A-Z, enter, etc...)
+      if (c != 0 && input.e - input.r < INPUT_BUF) {
+        if (c == '\r') {
+          c = '\n';
+        }
+
+        input.buf[input.e++ % INPUT_BUF] = c; // Store the char in the input buffer
+        
+        // Write a newline if the user pressed enter
+        if (c == '\n') {
+          consputc('\n');
+        }
+        input.w = input.e;
+        wakeup(&input.r); // Tell the shell it needs to process what was entered
       }
       break;
     }

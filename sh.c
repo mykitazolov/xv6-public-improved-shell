@@ -13,6 +13,22 @@
 
 #define MAXARGS 10
 
+// Define constants for the up, down, left, and right arrow keys (SAME as in kbd.h)
+#define KEY_UP 0xE2
+#define KEY_DN 0xE3
+#define KEY_LF 0xE4
+#define KEY_RT 0xE5
+
+#define HISTORY_SIZE 20 // Maximum number of previous commands to store
+#define CMD_SIZE 100 // Maximum length for one specific command
+
+static char history[HISTORY_SIZE][CMD_SIZE]; // Array of size 20x100 to store past commands
+static int history_len = 0; // Number of commands stored so far
+
+// Functions declarations 
+static void redraw(const char *buf, int len, int cursor, int prev_len);
+static int readline_xv6(char *buf, int nbuf);
+
 struct cmd {
   int type;
 };
@@ -133,15 +149,220 @@ runcmd(struct cmd *cmd)
 }
 #pragma GCC diagnostic pop
 
-int
-getcmd(char *buf, int nbuf)
-{
-  printf(2, "$ ");
-  memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if(buf[0] == 0) // EOF
-    return -1;
+// This function will act as a replacement for the gets function which was previously used here
+int getcmd(char *buf, int nbuf) {
+  write(2, "$ ", 2); // Print the shell promopt
+  memset(buf, 0, nbuf); // Clear the command buffer
+
+  // Read the edited line (which can be handled with left/right arrows)
+  if (readline_xv6(buf, nbuf) < 0) {
+    return -1; // Returns -1 if error happened
+  }
   return 0;
+}
+
+// This small helper function will write the specified char to the specified fd
+static void putc_fd(int fd, char c) {
+  write(fd, &c, 1);
+}
+
+// This helper function will fully redraw the command line on the screen. This is needed because natively there's no way to handle left/right arrow key editing.
+static void redraw(const char *buf, int len, int cursor, int prev_len) {
+  int i;
+  putc_fd(2, '\r'); // Return to the start of the line
+  write(2, "$ ", 2); // Reprint the prompt
+
+  if (len > 0) {
+    write(2, buf, len); // Print the current command
+  }
+
+  // If the newline is shorter than the old one, clear the chars that are leftover
+  for (i = len; i < prev_len; i++) {
+    putc_fd(2, ' ');
+  }
+
+  // Move the cursor back over empty/cleared spaces
+  for (i = len; i < prev_len; i++) {
+    putc_fd(2, '\b');
+  }
+
+  // Move the cursor left to its required position
+  for (i = len; i > cursor; i--) {
+    putc_fd(2, '\b');
+  }
+}
+
+// This helper function will add a new command to the history buffer we have made
+static void history_add(const char *line) {
+  int len = strlen(line); // Length of the new command
+  
+  // Ignore empty commands
+  if (len <= 0) {
+    return;
+  }
+
+  // If the most recent command is a duplicate of the last one do not store it
+  if (history_len > 0) {
+    if (strcmp(history[history_len - 1], line) == 0) {
+      return;
+    }
+  }
+
+  // If the command buffer is not full, add the command and increment the number of commands
+  if (history_len < HISTORY_SIZE) {
+    strcpy(history[history_len], line);
+    history_len++;
+  } 
+  
+  // Else, the command buffer is full
+  else {
+
+    // Shift older commands to the left
+    for (int i = 1; i < HISTORY_SIZE; i++) {
+      strcpy(history[i - 1], history[i]);
+    }
+
+    strcpy(history[HISTORY_SIZE - 1], line); // Add the most recent command to the end
+  }
+}
+
+// This helper function will support the cursor movement (and insertion/deletion of chars) and command history navigation
+static int readline_xv6(char *buf, int nbuf) {
+  int len = 0; // Chars in the buffer
+  int cursor = 0; // Starting cursor position inside the buffer
+  int prev_len = 0; // Previous printed length
+  int hist_idx = history_len; // Start after the last command
+  buf[0] = 0; // Start with an empty string
+
+  while (1) {
+
+    // Read the next input and save it into c (arrow keys are received as KEY_x)
+    char c;
+    int n = read(0, &c, 1);
+    
+    // If there is no more input we reached the end
+    if (n < 1) {
+      return -1;
+    }
+
+    // Enter key was pressed 
+    if ((unsigned char)c == '\n' || (unsigned char)c == '\r') {
+      buf[len] = 0; // End the buffer
+      putc_fd(2, '\n'); // Move onto the next line
+      history_add(buf); // Add the command to the command history
+      return 0;
+    }
+
+    // Left arrow was pressed
+    if ((unsigned char)c == KEY_LF) {
+      
+      // If the cursor is not all the way to the left, decrement it and redraw the command line to the user
+      if (cursor > 0) {
+        cursor--;
+        redraw(buf, len, cursor, prev_len);
+        prev_len = len; // Set the previous command length to the current command length
+      }
+      continue;
+    }
+
+    // Right arrow was pressed
+    if ((unsigned char)c == KEY_RT) {
+
+      // If the cursor is not all the way to the right, increment it and redraw the command line to the user
+      if (cursor < len) {
+        cursor++;
+        redraw(buf, len, cursor, prev_len);
+        prev_len = len; // Set the previous command length to the current command length
+      }
+      continue;
+    }
+
+    // Up arrow was pressed
+    if ((unsigned char)c == KEY_UP) {
+
+      // If we have command history to look through
+      if (history_len > 0) {
+        
+        // Go backwards through the history once
+        if (hist_idx > 0) {
+          hist_idx--;
+        }
+
+        strcpy(buf, history[hist_idx]); // Get the history entry
+        len = strlen(buf); // Update the length
+        cursor = len; // Move the cursor to the end
+        redraw(buf, len, cursor, prev_len); // Redraw the command line to the user
+        prev_len = len; // Set the previous command length to the current command length
+      }
+      continue;
+    }
+
+    // Down arrow was pressed
+    if ((unsigned char)c == KEY_DN) {
+
+      // If we have command history to look through
+      if (history_len > 0) {
+
+        // Go forward through the command history once
+        if (hist_idx < history_len) {
+          hist_idx++;
+        }
+
+        //If the we are at the end, clear the buffer and set the length to 0
+        if (hist_idx == history_len) {
+          buf[0] = 0;
+          len = 0;
+        } 
+        
+        // Else, copy the command into the buffer, and gets its length
+        else {
+          strcpy(buf, history[hist_idx]);
+          len = strlen(buf);
+        }
+        cursor = len; // Move the cursor to the end
+        redraw(buf, len, cursor, prev_len); // Redraw the command line to the user
+        prev_len = len; // Set the previous command length to the current command length
+      }
+      continue;
+    }
+
+    // If the backspace or delete key was pressed
+    if ((unsigned char)c == 0x08 || (unsigned char)c == 0x7f) {
+
+      // If there is a current command on the screen (cursor is pointing to something)
+      if (cursor > 0) {
+
+        // Shift the characters left
+        for (int i = cursor - 1; i < len - 1; i++) {
+          buf[i] = buf[i + 1];
+        }
+        len--; // Decrement the length as we deleted one char
+        cursor--; // Move the cursor to the left
+        buf[len] = 0; // Update the end of the string with a 0
+        redraw(buf, len, cursor, prev_len); // Redraw the command line to the user
+        prev_len = len; // Set the previous command length to the current command length
+      }
+      continue;
+    }
+
+    // This is for normal printable ASCII chars
+    if ((unsigned char)c >= 32 && (unsigned char)c < 127) {
+      
+      // Shift the chars to the right
+      if (len < nbuf - 1) {
+        for (int i = len; i > cursor; i--) {
+          buf[i] = buf[i - 1];
+        }
+        buf[cursor] = (unsigned char)c; // Insert the new char at the cursor position
+        cursor++; // Move the cursor to the right
+        len++; // Increment the length
+        buf[len] = 0; // Update the end of the string with a 0
+        redraw(buf, len, cursor, prev_len); // Redraw the command line to the user
+        prev_len = len; // Set the previous command length to the current command length
+      }
+      continue;
+    }
+  }
 }
 
 int
