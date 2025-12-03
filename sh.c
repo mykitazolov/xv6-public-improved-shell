@@ -25,6 +25,8 @@
 static char history[HISTORY_SIZE][CMD_SIZE]; // Array of size 20x100 to store past commands
 static int history_len = 0; // Number of commands stored so far
 
+static char cwd[128] = "~/";
+
 // Functions declarations 
 static void redraw(const char *buf, int len, int cursor, int prev_len);
 static int readline_xv6(char *buf, int nbuf);
@@ -151,6 +153,7 @@ runcmd(struct cmd *cmd)
 
 // This function will act as a replacement for the gets function which was previously used here
 int getcmd(char *buf, int nbuf) {
+  write(2, cwd, strlen(cwd));
   write(2, "$ ", 2); // Print the shell promopt
   memset(buf, 0, nbuf); // Clear the command buffer
 
@@ -170,6 +173,7 @@ static void putc_fd(int fd, char c) {
 static void redraw(const char *buf, int len, int cursor, int prev_len) {
   int i;
   putc_fd(2, '\r'); // Return to the start of the line
+  write(2, cwd, strlen(cwd));
   write(2, "$ ", 2); // Reprint the prompt
 
   if (len > 0) {
@@ -381,11 +385,37 @@ main(void)
 
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){
-    if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
+    if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' ') {
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
-      if(chdir(buf+3) < 0)
-        printf(2, "cannot cd %s\n", buf+3);
+      char *path = buf + 3;
+      if (chdir(path) < 0) {
+        printf(2, "cannot cd %s\n", path);
+      } else {
+        if (path[0] == '/') {
+          strcpy(cwd, path);
+        } else {
+          int len = strlen(cwd);
+          if (strcmp(cwd, "/") != 0) {
+            cwd[len] = '/';
+            cwd[len + 1] = 0;
+            len++;
+          }
+          int i = 0;
+          while (path[i] != 0) {
+            cwd[len++] = path[i++];
+          }
+          cwd[len] = 0;
+        }
+      }
+      continue;
+    }
+    if (strcmp(buf, "pwd") == 0) {
+      printf(1, "%s\n", cwd);
+      continue;
+    }
+    if (strcmp(buf, "clear") == 0) {
+      printf(1, "\033[2J\033[H");
       continue;
     }
     if(fork1() == 0)
