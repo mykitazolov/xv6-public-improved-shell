@@ -25,7 +25,7 @@
 static char history[HISTORY_SIZE][CMD_SIZE]; // Array of size 20x100 to store past commands
 static int history_len = 0; // Number of commands stored so far
 
-static char cwd[128] = "~/";
+static char cwd[128] = "/";
 
 // Functions declarations 
 static void redraw(const char *buf, int len, int cursor, int prev_len);
@@ -154,7 +154,7 @@ runcmd(struct cmd *cmd)
 // This function will act as a replacement for the gets function which was previously used here
 int getcmd(char *buf, int nbuf) {
   write(2, cwd, strlen(cwd));
-  write(2, "$ ", 2); // Print the shell promopt
+  write(2, " $ ", 3); // Print the shell promopt
   memset(buf, 0, nbuf); // Clear the command buffer
 
   // Read the edited line (which can be handled with left/right arrows)
@@ -174,7 +174,7 @@ static void redraw(const char *buf, int len, int cursor, int prev_len) {
   int i;
   putc_fd(2, '\r'); // Return to the start of the line
   write(2, cwd, strlen(cwd));
-  write(2, "$ ", 2); // Reprint the prompt
+  write(2, " $ ", 3); // Reprint the prompt
 
   if (len > 0) {
     write(2, buf, len); // Print the current command
@@ -387,7 +387,12 @@ main(void)
   while(getcmd(buf, sizeof(buf)) >= 0){
     if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' ') {
       // Chdir must be called by the parent, not the child.
-      buf[strlen(buf)-1] = 0;  // chop \n
+      int length = strlen(buf); // Get the length of the command stored in the buff
+      
+      // Make sure the buffer is not empty, and check if the last char is a newline
+      if (length > 0 && (buf[length - 1] == '\n' || buf[length - 1] == '\r')) {
+        buf[length - 1] = 0; // Replace the newline with 0 to mark the end of this string
+      }
       char *path = buf + 3;
       if (chdir(path) < 0) {
         printf(2, "cannot cd %s\n", path);
